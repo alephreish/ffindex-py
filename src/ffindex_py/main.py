@@ -65,7 +65,6 @@ def run_apply():
     ffdata_out, ffindex_out = args.d, args.i
     cmd = args.command
     jobs = args.j
-    do_sort = jobs > 1
     verbose = not args.q
 
     # parallel execution with ThreadPoolExecutor
@@ -78,8 +77,7 @@ def run_apply():
                 start, length = int(start), int(length)
                 futures.append(executor.submit(apply_to_record, cmd, name, start, length, ffdata_in))
                 names.append(name)
-        if do_sort:
-            names.sort()
+        names.sort()
 
         # Write the output
         with open(ffdata_out, 'wb') as outdata, open(ffindex_out, 'w') as outindex:
