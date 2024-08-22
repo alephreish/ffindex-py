@@ -8,6 +8,20 @@ import argparse
 version = "1.0"
 visit = "Visit the project at https://github.com/alephreish/ffindex-py"
 
+def read_fasta(file):
+    seq = name = header = ''
+    for line in file:
+        if line.startswith('>'):
+            if seq:
+                yield name, header, seq
+            seq = ''
+            header = line[1:].rstrip()
+            name = header.split()[0]
+        else:
+            seq += line
+    if seq:
+        yield name, header, seq
+
 def apply_to_record(command, name, start, length, ffdata_in):
     with open(ffdata_in, 'rb') as ffdata:
         ffdata.seek(start)
@@ -116,3 +130,29 @@ def run_reindex():
                 if record_length > 0:
                     ffindex_file.write(f'{name}\t{offset}\t{record_length+1}\n')
                 break
+
+def run_from_fasta():
+    description = "Create a ffindex database from a fasta file"
+    parser = argparse.ArgumentParser(description = f"{description}\n{visit}", add_help = False)
+
+    arg_group = parser.add_argument_group()
+
+    arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
+    arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('ffdata', metavar = 'DATA_FILENAME_OUT', type = str, help = 'Path to output ffdata file.')
+    arg_group.add_argument('ffindex', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'Path to output ffindex file.')
+    arg_group.add_argument('fasta', metavar = 'FASTA', type = str, help = 'Path to input fasta file.')
+
+    args = parser.parse_args()
+
+    fasta_file = args.fasta
+    ffdata_file, ffindex_file = args.ffdata, args.ffindex
+
+    with open(fasta_file, 'r') as fasta, open(ffdata_file, 'wb') as ffdata, open(ffindex_file, 'w') as ffindex:
+        offset = 0
+        for name, header, seq in read_fasta(fasta):
+            fasta_record_bytes = f'>{header}\n{seq}\0'.encode('utf-8')
+            record_length = len(fasta_record_bytes)
+            ffdata.write(fasta_record_bytes)
+            ffindex.write(f'{name}\t{offset}\t{record_length}\n')
+            offset += record_length

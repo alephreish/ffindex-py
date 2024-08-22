@@ -25,3 +25,4 @@ dependencies = [ ]
 [project.scripts]
 ffindex_apply_py = "ffindex_py.main:run_apply"
 ffindex_reindex_py = "ffindex_py.main:run_reindex"
+ffindex_from_fasta_py = "ffindex_py.main:run_from_fasta"
