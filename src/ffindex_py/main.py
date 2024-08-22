@@ -1,8 +1,7 @@
 
 import concurrent.futures
 import subprocess
-import os
-from sys import argv
+import sys
 import argparse
 
 version = "1.0"
@@ -26,9 +25,9 @@ def apply_to_record(command, name, start, length, ffdata_in):
     with open(ffdata_in, 'rb') as ffdata:
         ffdata.seek(start)
         record = ffdata.read(length - 1)
-        process = subprocess.Popen(command, stdout = subprocess.PIPE, stdin = subprocess.PIPE)
-        result = process.communicate(input = record)[0]
-        return name, result
+        process = subprocess.Popen(command, stdout = subprocess.PIPE, stdin = subprocess.PIPE, stderr = subprocess.PIPE)
+        stdout, stderr = process.communicate(input = record)
+        return name, stdout, stderr, process.returncode
 
 def run_apply():
 
@@ -67,31 +66,42 @@ def run_apply():
     cmd = args.command
     jobs = args.j
     verbose = not args.q
-
+    
     # parallel execution with ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers = jobs) as executor:
         futures = []
+        names = []
         with open(ffindex_in, 'r') as f:
             for line in f:
                 name, start, length = line.strip().split('\t') # split line using \t character
                 start, length = int(start), int(length)
                 futures.append(executor.submit(apply_to_record, cmd, name, start, length, ffdata_in))
+                names.append(name)
 
-        # Write the output 
+        # Write the output
         with open(ffdata_out, 'wb') as outdata, open(ffindex_out, 'w') as outindex:
             offset = 0
+            index_buf = {}
             for future in concurrent.futures.as_completed(futures):
                 try:
-                    name, result = future.result()
-                except Exception as exc:
-                    print(f'Record {name} generated an exception: {exc}')
+                    name, stdout, stderr, returncode = future.result()
+                    if returncode > 0:
+                        message = stderr.decode("utf-8")
+                        raise Exception(f"Got exit code {returncode} with stderr content: {message}")
+                except Exception as e:
+                    print(f'Record {name} generated an exception: {e}')
                 else:
                     if verbose:
                         print(name)
-                    outdata.write(result + b'\0')
-                    length = len(result) + 1
-                    outindex.write(f"{name}\t{offset}\t{length}\n")  # use \t to join fields
+                    outdata.write(stdout + b'\0')
+                    length = len(stdout) + 1
+                    index_buf[name] = offset, length
                     offset += length
+                    # to guarantee the same order of ffindex
+                    while names and names[0] in index_buf:
+                        name0 = names.pop(0)
+                        offset0, length0 = index_buf.pop(name0)
+                        outindex.write(f"{name0}\t{offset0}\t{length0}\n")
 
 def run_reindex():
     description = "Re-index an existing .ffdata file"
