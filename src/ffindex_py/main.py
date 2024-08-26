@@ -8,7 +8,6 @@ import contextlib
 version = "1.0"
 visit = "Visit the project at https://github.com/alephreish/ffindex-py"
 
-
 @contextlib.contextmanager
 def open_file_or_stdout(filename, mode = 'w'):
     fh = sys.stdout if filename == '-' else open(filename, mode)
@@ -89,7 +88,7 @@ def run_get():
 
     found = [ (None, None, None) ] * len(entries)
 
-    with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb') as data_in, open(ffindex_out, 'w') as index_out, open(ffdata_out, 'wb') as data_out:
+    with open(ffindex_in, 'r') as index_in, open(ffdata_in, 'rb', buffering = 0) as data_in, open(ffindex_out, 'w') as index_out, open(ffdata_out, 'wb') as data_out:
         offset = 0
         for index, name, start, length in read_ffindex(index_in):
             needle = index if use_index else name
@@ -103,6 +102,17 @@ def run_get():
         for i, (name, offset, length) in enumerate(found):
             assert name is not None, f"Requested entry '{entries[i]}' not found in the index"
             index_out.write(f"{name}\t{offset}\t{length}\n")
+
+def read_header_line(file):
+    header = ''
+    while True:
+        data_chunk = file.read(1024)
+        assert data_chunk, "Unexpected end of file - no null byte found"
+        for byte in data_chunk:
+            if byte < 33:
+                return header
+            else:
+                header += chr(byte)
 
 def run_rename():
     description = "rename ffindex records"
@@ -123,11 +133,11 @@ def run_rename():
     ffindex_out = args.i if args.i else '-'
 
     names = {}
-    with open(ffindex_in) as index_in, open(ffdata_in) as data_in, open_file_or_stdout(ffindex_out, 'w') as index_out:
+    with open(ffindex_in) as index_in, open(ffdata_in, 'rb') as data_in, open_file_or_stdout(ffindex_out, 'w') as index_out:
         for index, name, start, length in read_ffindex(index_in):
             data_in.seek(start)
-            data_line = next(data_in)
-            new_name = data_line.lstrip('#>').split(maxsplit = 1)[0]
+            new_name = read_header_line(data_in)
+            new_name = new_name.lstrip('#>')
             assert new_name, f"Empty name at index {index}"
             assert new_name not in names, f"Duplicate name '{new_name}'"
             names[new_name] = True
@@ -222,6 +232,9 @@ def run_reindex():
 
     arg_group.add_argument('-h', '--help', action = 'help', default=argparse.SUPPRESS, help = "Show this help message and exit.")
     arg_group.add_argument('-v', '--version', action = 'version', version = "%(prog)s v{version}", help = "Show program's version number and exit.")
+    arg_group.add_argument('-p', action = 'store_true', help = 'Parse names from the first line in each record.')
+    arg_group.add_argument('-r', action = 'store_true', help = 'Rename duplicate names (otherwise raise exception on duplicate).')
+
     arg_group.add_argument('ffdata', metavar = 'DATA_FILENAME_IN', type = str, help = 'Path to the ffdata file to be reindexed')
     arg_group.add_argument('ffindex', metavar = 'INDEX_FILENAME_OUT', type = str, help = 'Path to the output ffindex file')
 
@@ -229,27 +242,45 @@ def run_reindex():
 
     ffdata_file = args.ffdata
     ffindex_file = args.ffindex
+    parse_names = args.p
+    allow_duplicates = args.r
 
     with open(ffdata_file, 'rb') as ffdata_file, open(ffindex_file, 'w') as ffindex_file:
         chunk_size = 1024*1024  # chunk size of 1MB
         offset = 0
-        record_length = 0
-        name = 0
+        record_length = 1
+        index = 0
+        headers = {}
+        in_header = True
+        header = ''
         while True:
             chunk = ffdata_file.read(chunk_size)
-            if chunk:  # if data exists in chunk
+            if chunk: # if data exists in chunk
                 for byte in chunk:
-                    if byte == 0:  # if null character is found
-                        ffindex_file.write(f'{name}\t{offset}\t{record_length+1}\n')
-                        offset += record_length + 1
-                        record_length = 0
-                        name += 1
+                    if byte == 0: # if null character is found
+                        if parse_names:
+                            header= header.lstrip('#>')
+                            assert header, f"Empty name at index {index}"
+                            while header in headers:
+                                assert allow_duplicates, f"Duplicate name '{header}'"
+                                header += '^'
+                            headers[header] = True
+                            name = header
+                        else:
+                            name = index
+                        ffindex_file.write(f'{name}\t{offset}\t{record_length}\n')
+                        offset += record_length
+                        record_length = 1
+                        index += 1
+                        header = ''
+                        in_header = True
                     else:
+                        if byte < 33:
+                            in_header = False
+                        if parse_names and in_header:
+                            header += chr(byte)
                         record_length += 1
             else:
-                # End of file, checking if there's a record without trailing null character
-                if record_length > 0:
-                    ffindex_file.write(f'{name}\t{offset}\t{record_length+1}\n')
                 break
 
 def run_from_fasta():
